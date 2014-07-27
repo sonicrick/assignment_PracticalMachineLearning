@@ -1,0 +1,109 @@
+Predicting Exercise - a Practical Machine Learning Example
+==========================================================
+
+```{r, echo=FALSE, results='hide', message=FALSE}
+setwd("~/GitHub/courses/08_PracticalMachineLearning/assignment")
+require(knitr)
+require(MASS)
+require(caret)
+memory.limit(3071)  # expand memory to accommodate random forest
+opts_chunk$set(echo=FALSE, results='hide', warning=FALSE,
+              cache=TRUE, cache.lazy=FALSE, message=FALSE)
+```
+
+This exercise seeks to correctly predict the type of exercise performed by subjects, based on sensor data collected while the subjects performed the exercise.
+
+Data used are from http://groupware.les.inf.puc-rio.br/har , and form the basis for creating potential prediction models to use. 19622 observations are available for training, and 20 observations where the dependent variable `classe` is unknown are designated for prediction.
+
+A few prediction method will be attempted and evaluated, before a final method is selected for use in actual prediction.
+
+## Pre-processing
+
+First we read in all the data set from `pml-training.csv`. Data preprocessing is done for all character fields:
+- dates are converted into numeric
+- fields which are classed as characters due to erroneous data (i.e. divison by 0) have the erroneous data removed as NA, allowing the fields to be converted to numeric
+- fields with more than half of its data being NA are also removed.
+
+```{r }
+fulldata <- read.csv("pml-training.csv", stringsAsFactors=FALSE)
+fulldata <- fulldata[, -1]  #remove running number
+fulldata$cvtd_timestamp <- as.numeric(strptime(fulldata$cvtd_timestamp, "%d/%m/%Y %H:%M"))
+#identify all character columns
+charclass <- which(lapply(fulldata, class) == "character")  
+#identify character columns that have division by 0
+div0 <- grep("#DIV/0!", fulldata[,charclass])
+#force all columns division by 0 to NA to convert to numeric (DIV/0 coerced to NA)
+fulldata[, charclass[div0]] <- as.numeric(as.matrix(fulldata[, charclass[div0]]))
+#remove columns where more than half the values are NA
+na.count <- colSums(is.na(fulldata))
+fulldata <- fulldata[, na.count < nrow(fulldata)/2]
+
+```
+
+The pre-processing above reduces the features to 59 from the initial 159. The remaining features (excluding the dependent variable `classe`) are then centred and scaled to have mean of 0 and variance of 1, to allow an equal comparison between all the different prediction models that will be tested later.
+
+```{r }
+#extract target variable, then center and scale all the rest
+classe <- as.factor(fulldata$classe)
+
+#remove those with 0 or NA standard variable (if any), then pre-process
+sdall <- sapply(fulldata, sd, na.rm=TRUE)
+excConstants <- which(is.na(sdall) | sdall==0)
+fulldata <- predict(preProcess(fulldata[,-excConstants], method=c("center", "scale")), fulldata[, -excConstants])
+
+```
+
+## Approach to Out-of-Sample Error
+
+Using all the available training data to perform the prediction risks overfitting, which may lead to prediction on data not within the training set to be skewed (out-of-sample error). To minimise this, validation of the classification tools will be done through cross-validation. The cross-validations for all prediction tools will use the same number of folds (5).
+
+The measure for the out-of-sample error will be the average of the error in the folds during cross-validation. Since this is a classification problem, accuracy will be used as the metric (the higher the accuracy, the lower out-of-sample error)
+
+```{r }
+trainCVControl <- trainControl(method="cv", number=5)
+accuracy <- numeric(3)
+```
+
+## Evaluating the Models
+
+The prediction task is one of classification. A summary of `classe` in the training data confirmed there are 5 possible outcomes, which rule out a few R classification tools which are only available for binomial classification (e.g. glm, adaBoosting). Three tools were selected: linear discriminant analysis, naive bayes, and random forest.
+
+### Linear Discriminant Analysis
+
+```{r , results='markup' }
+set.seed(5179)
+ldamodelFit <- train(classe ~., data=fulldata, method="lda", trControl=trainCVControl)
+print(ldamodelFit)
+```
+
+### Naive Bayes
+
+```{r, results='markup'}
+set.seed(5179)
+nbmodelFit <- train(classe ~., data=fulldata, method="nb", trControl=trainCVControl)
+print(nbmodelFit)
+```
+
+### Random forest
+
+```{r, results='markup'}
+set.seed(5179)
+RFmodelFit <- train(classe ~ ., data=fulldata, 
+                  method="rf", nodesize=5,trControl=trainCVControl)
+print(RFmodelFit)
+```
+
+
+## Predicting with the model
+
+As seen from the figures above, random forest yields the best accuracy in predicting `classe`, and is selected for the classification. The test data is filtered for just the features derived by training data above. The random forest method is then applied to the test data.
+
+
+```{r , echo=TRUE, eval=FALSE}
+testdata <- read.csv("pml-testing.csv", stringsAsFactors=FALSE)
+testdata$cvtd_timestamp <- as.numeric(strptime(testdata$cvtd_timestamp, "%d/%m/%Y %H:%M"))
+
+#keep only columns same as retained in fulldata -> assumes assignment.Rmd has been run
+testdata <- testdata[, which(names(testdata) %in% names(fulldata))]
+test.prediction <- predict(RFmodelFit, testdata)
+```
